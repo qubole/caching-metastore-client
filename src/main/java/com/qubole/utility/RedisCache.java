@@ -125,30 +125,54 @@ public class RedisCache<K, V> extends AbstractLoadingCache<K, V> implements Load
 
   @Override
   public V get(K key, Callable<? extends V> valueLoader) throws ExecutionException {
+    V value = null;
+    Boolean cacheException = false;
+
     try {
-      V value = this.getIfPresent(key);
-      if (value == null) {
-        if (!enableMissingCache || !checkMissingCache(key)) {
-          value = valueLoader.call();
-          if (value == null) {
-            throw new CacheLoader
-                    .InvalidCacheLoadException("valueLoader must not return null, key=" + key);
-          } else {
-            this.put(key, value);
-          }
-        } else {  //Missing cache is enabled and the key is present in missing cache.
-          convertAndThrow(
-                  new ExecutionException("key found in missing cache, key doesn't exist.", null));
-        }
-      }
-      return value;
+      value = this.getIfPresent(key);
     } catch (Throwable e) {
-      this.putNotFound(key, "Does not exist.");
-      convertAndThrow(e);
-      // never execute
-      return null;
+      cacheException = true;
     }
+
+    //get value from valueloader and update cache accordingly.
+    if (value == null) {
+      //Missing cache is enabled and the key is present in missing cache.
+      if (enableMissingCache && checkMissingCache(key)) {
+        convertAndThrow(
+                new ExecutionException("key found in missing cache, key doesn't exist.", null));
+      } else {
+        //Either the missing cache is not enabled
+        //or, it's enabled and the key is not present in missing cache
+        value = getFromSource(key, valueLoader, cacheException);
+
+      }
+    }
+    return value;
   }
+
+  public V getFromSource(K key, Callable<? extends V> valueLoader, Boolean cacheException)
+          throws ExecutionException {
+
+    V value = null;
+    try {
+      value = valueLoader.call();
+    } catch (Throwable e) {
+      if (enableMissingCache && !cacheException) {
+        this.putNotFound(key, "Does not exist.");
+      }
+      convertAndThrow(e);
+    }
+    if (value == null) {
+      throw new CacheLoader
+              .InvalidCacheLoadException("valueLoader must not return null, key=" + key);
+    }
+
+    if (!cacheException) {
+      this.put(key, value);
+    }
+    return value;
+  }
+
 
   @Override
   public ImmutableMap<K, V> getAllPresent(Iterable<?> keys) {
@@ -183,6 +207,9 @@ public class RedisCache<K, V> extends AbstractLoadingCache<K, V> implements Load
       } else {
         jedis.set(keyBytes, valueBytes);
       }
+    } catch (Exception e) {
+      LOGGER.error("Error in putting the key to redis");
+
     }
   }
 
@@ -197,6 +224,8 @@ public class RedisCache<K, V> extends AbstractLoadingCache<K, V> implements Load
       } else {
         jedis.set(keyBytes, valueBytes);
       }
+    } catch (Exception e) {
+      LOGGER.error("Error in putting the key to not-found redis");
     }
   }
 
@@ -331,6 +360,10 @@ public class RedisCache<K, V> extends AbstractLoadingCache<K, V> implements Load
     } else {
       throw new ExecutionError((Error) t);
     }
+  }
+
+  byte[] getNotFoundPrefix() {
+    return this.notFoundPrefix;
   }
 
 }
