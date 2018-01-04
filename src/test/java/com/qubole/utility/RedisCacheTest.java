@@ -1,6 +1,8 @@
 package com.qubole.utility;
 
 import com.google.common.cache.CacheLoader;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Iterables;
 import com.google.common.primitives.Bytes;
 import org.apache.commons.lang3.SerializationUtils;
 
@@ -12,6 +14,11 @@ import redis.clients.jedis.JedisPool;
 import redis.clients.jedis.exceptions.JedisConnectionException;
 
 import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 
@@ -148,4 +155,36 @@ public class RedisCacheTest {
     verify(redisCache, Mockito.times(0)).put(Matchers.anyObject(), Matchers.anyObject());
   }
 
+  @Test
+  public void testGetAllPresentWithNoMatches() throws Exception {
+    String keyPrefixStr = "test.";
+    String key = "key";
+
+    JedisPool jedisPool = mock(JedisPool.class);
+    Jedis jedis = mock(Jedis.class);
+    when(jedisPool.getResource()).thenReturn(jedis);
+
+    byte[] keyPrefix = keyPrefixStr.getBytes();
+    int expiration = 1;
+    int missingCacheExpiration = 1;
+    boolean enableMissingCache = false;
+
+    CacheLoader<String, Integer> cacheLoader = mock(CacheLoader.class);
+    RedisCache redisCache = new RedisCache<>(jedisPool, keyPrefix, expiration, missingCacheExpiration, cacheLoader, enableMissingCache);
+
+    List<byte[]> keyBytes = new ArrayList<>();
+    JdkSerializer<String> serializer = new JdkSerializer<>();
+    keyBytes.add(Bytes.concat(keyPrefix, serializer.serialize(key)));
+    List<byte[]> expectedValues = new ArrayList<>();
+    expectedValues.add(null);
+    when(jedis.mget(Iterables.toArray(keyBytes, byte[].class))).thenReturn(expectedValues);
+
+    Set<String> keys = new HashSet<>();
+    keys.add(key);
+    Iterable<String> iterables = keys;
+    ImmutableMap values = redisCache.getAllPresent(iterables);
+
+    //expect a empty map.
+    assert (values.size() == 0);
+  }
 }
