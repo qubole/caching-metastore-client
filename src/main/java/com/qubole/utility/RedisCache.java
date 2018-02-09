@@ -246,11 +246,11 @@ public class RedisCache<K, V> extends AbstractLoadingCache<K, V> implements Load
     try (Jedis jedis = jedisPool.getResource()) {
       if (expiration > 0) {
         Pipeline pipeline = jedis.pipelined();
-        jedis.mset(Iterables.toArray(keysvalues, byte[].class));
+        pipeline.mset(Iterables.toArray(keysvalues, byte[].class));
         for (int i = 0; i < keysvalues.size(); i += 2) {
-          jedis.expire(keysvalues.get(i), expiration);
+          pipeline.expire(keysvalues.get(i), expiration);
         }
-        pipeline.exec();
+        pipeline.sync();
       } else {
         jedis.mset(Iterables.toArray(keysvalues, byte[].class));
       }
