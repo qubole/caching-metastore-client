@@ -4,12 +4,12 @@
 
     <groupId>com.qubole.tenali</groupId>
     <artifactId>metastore</artifactId>
-    <version>0.1.7-SNAPSHOT</version>
+    <version>0.1.7</version>
     <name>metastore</name>
 
     <scm>
         <developerConnection>scm:git:git@github.com:qubole/caching-metastore-client.git</developerConnection>
-        <tag>HEAD</tag>
+        <tag>0.1.7</tag>
     </scm>
 
     <repositories>
