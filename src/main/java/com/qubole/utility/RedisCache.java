@@ -106,10 +106,13 @@ public class RedisCache<K, V> extends AbstractLoadingCache<K, V> implements Load
         LOGGER.info("cache hit, key: " + new String(key));
         return valueSerializer.deserialize(reply);
       }
+    } catch (Exception e) {
+      LOGGER.warn("getIfPresent failed for key: " + o + " with exception: " + e.toString());
+      return null;
     }
   }
 
-  public Boolean checkMissingCache(Object o) {
+  public boolean checkMissingCache(Object o) {
     try (Jedis jedis = jedisPool.getResource()) {
       byte[] key = Bytes.concat(notFoundPrefix, keySerializer.serialize(o));
       boolean reply = jedis.exists(key);
@@ -119,20 +122,16 @@ public class RedisCache<K, V> extends AbstractLoadingCache<K, V> implements Load
         LOGGER.info("cache hit, key: " + new String(key));
       }
       return reply;
+    } catch (Exception e) {
+      LOGGER.warn("checkMissingCache failed for key: " + o + " with exception: " + e.toString());
+      return false;
     }
   }
 
 
   @Override
   public V get(K key, Callable<? extends V> valueLoader) throws ExecutionException {
-    V value = null;
-    Boolean cacheException = false;
-
-    try {
-      value = this.getIfPresent(key);
-    } catch (Throwable e) {
-      cacheException = true;
-    }
+    V value = getIfPresent(key);
 
     //get value from valueloader and update cache accordingly.
     if (value == null) {
@@ -143,21 +142,20 @@ public class RedisCache<K, V> extends AbstractLoadingCache<K, V> implements Load
       } else {
         //Either the missing cache is not enabled
         //or, it's enabled and the key is not present in missing cache
-        value = getFromSource(key, valueLoader, cacheException);
-
+        value = getFromSource(key, valueLoader);
       }
     }
     return value;
   }
 
-  public V getFromSource(K key, Callable<? extends V> valueLoader, Boolean cacheException)
+  public V getFromSource(K key, Callable<? extends V> valueLoader)
           throws ExecutionException {
 
     V value = null;
     try {
       value = valueLoader.call();
     } catch (Throwable e) {
-      if (enableMissingCache && !cacheException) {
+      if (enableMissingCache) {
         this.putNotFound(key, "Does not exist.");
       }
       convertAndThrow(e);
@@ -167,21 +165,18 @@ public class RedisCache<K, V> extends AbstractLoadingCache<K, V> implements Load
               .InvalidCacheLoadException("valueLoader must not return null, key=" + key);
     }
 
-    if (!cacheException) {
-      this.put(key, value);
-    }
+    this.put(key, value);
     return value;
   }
 
 
   @Override
   public ImmutableMap<K, V> getAllPresent(Iterable<?> keys) {
-    List<byte[]> keyBytes = new ArrayList<>();
-    for (Object key : keys) {
-      keyBytes.add(Bytes.concat(keyPrefix, keySerializer.serialize(key)));
-    }
-
     try (Jedis jedis = jedisPool.getResource()) {
+      List<byte[]> keyBytes = new ArrayList<>();
+      for (Object key : keys) {
+        keyBytes.add(Bytes.concat(keyPrefix, keySerializer.serialize(key)));
+      }
       List<byte[]> valueBytes = jedis.mget(Iterables.toArray(keyBytes, byte[].class));
 
       Map<K, V> map = new LinkedHashMap<>();
@@ -199,32 +194,32 @@ public class RedisCache<K, V> extends AbstractLoadingCache<K, V> implements Load
         }
       }
       return ImmutableMap.copyOf(map);
+    } catch (Exception e) {
+      LOGGER.error("Exception in getAllPresent: " + e.toString());
+      return ImmutableMap.of();
     }
   }
 
   @Override
   public void put(K key, V value) {
-    byte[] keyBytes = Bytes.concat(keyPrefix, keySerializer.serialize(key));
-    byte[] valueBytes = valueSerializer.serialize(value);
-
     try (Jedis jedis = jedisPool.getResource()) {
+      byte[] keyBytes = Bytes.concat(keyPrefix, keySerializer.serialize(key));
+      byte[] valueBytes = valueSerializer.serialize(value);
       if (expiration > 0) {
         jedis.setex(keyBytes, expiration, valueBytes);
       } else {
         jedis.set(keyBytes, valueBytes);
       }
     } catch (Exception e) {
-      LOGGER.error("Error in putting the key to redis");
-
+      LOGGER.error("Failed to put the key: " + key + ", with exception: " + e.toString());
     }
   }
 
 
   public void putNotFound(K key, String value) {
-    byte[] keyBytes = Bytes.concat(notFoundPrefix, keySerializer.serialize(key));
-    byte[] valueBytes = value.getBytes();
-
     try (Jedis jedis = jedisPool.getResource()) {
+      byte[] keyBytes = Bytes.concat(notFoundPrefix, keySerializer.serialize(key));
+      byte[] valueBytes = value.getBytes();
       if (missingCacheExpiration > 0) {
         jedis.setex(keyBytes, missingCacheExpiration, valueBytes);
       } else {
@@ -237,13 +232,13 @@ public class RedisCache<K, V> extends AbstractLoadingCache<K, V> implements Load
 
   @Override
   public void putAll(Map<? extends K, ? extends V> m) {
-    List<byte[]> keysvalues = new ArrayList<>();
-    for (Map.Entry<? extends K, ? extends V> entry : m.entrySet()) {
-      keysvalues.add(Bytes.concat(keyPrefix, keySerializer.serialize(entry.getKey())));
-      keysvalues.add(valueSerializer.serialize(entry.getValue()));
-    }
-
     try (Jedis jedis = jedisPool.getResource()) {
+      List<byte[]> keysvalues = new ArrayList<>();
+      for (Map.Entry<? extends K, ? extends V> entry : m.entrySet()) {
+        keysvalues.add(Bytes.concat(keyPrefix, keySerializer.serialize(entry.getKey())));
+        keysvalues.add(valueSerializer.serialize(entry.getValue()));
+      }
+
       if (expiration > 0) {
         Pipeline pipeline = jedis.pipelined();
         pipeline.mset(Iterables.toArray(keysvalues, byte[].class));
@@ -254,6 +249,8 @@ public class RedisCache<K, V> extends AbstractLoadingCache<K, V> implements Load
       } else {
         jedis.mset(Iterables.toArray(keysvalues, byte[].class));
       }
+    } catch (Exception e) {
+      LOGGER.error("Exception in putAll: " + e.toString());
     }
   }
 
@@ -261,6 +258,8 @@ public class RedisCache<K, V> extends AbstractLoadingCache<K, V> implements Load
   public void invalidate(Object key) {
     try (Jedis jedis = jedisPool.getResource()) {
       jedis.del(Bytes.concat(keyPrefix, keySerializer.serialize(key)));
+    } catch (Exception e) {
+      LOGGER.error("Failed to invalidate key: " + key + " with exception: " + e.toString());
     }
   }
 
